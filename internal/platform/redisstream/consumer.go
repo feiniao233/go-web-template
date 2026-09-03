@@ -129,19 +129,23 @@ func (c *Consumer) retryPending(ctx context.Context, handle func(context.Context
 	}
 
 	for _, item := range pending {
+		if c.maxDeliveries > 0 && item.RetryCount >= c.maxDeliveries {
+			message, err := c.messageByID(ctx, item.ID)
+			if err != nil {
+				return false, err
+			}
+			if err := c.deadLetter(ctx, message, item.RetryCount, errors.New("maximum deliveries exceeded")); err != nil {
+				return false, err
+			}
+			continue
+		}
+
 		messages, err := c.claim(ctx, item.ID)
 		if err != nil {
 			return false, err
 		}
 		for _, message := range messages {
-			deliveryCount := item.RetryCount + 1
-			if c.maxDeliveries > 0 && item.RetryCount >= c.maxDeliveries {
-				if err := c.deadLetter(ctx, message, deliveryCount, errors.New("maximum deliveries exceeded")); err != nil {
-					return false, err
-				}
-				continue
-			}
-			if err := c.process(ctx, message, deliveryCount, handle); err != nil {
+			if err := c.process(ctx, message, item.RetryCount+1, handle); err != nil {
 				return false, err
 			}
 		}
@@ -160,6 +164,17 @@ func (c *Consumer) claim(ctx context.Context, id string) ([]redis.XMessage, erro
 		return nil, fmt.Errorf("claim Redis Stream message %s: %w", id, err)
 	}
 	return messages, nil
+}
+
+func (c *Consumer) messageByID(ctx context.Context, id string) (redis.XMessage, error) {
+	messages, err := c.client.XRangeN(ctx, c.stream, id, id, 1).Result()
+	if err != nil {
+		return redis.XMessage{}, fmt.Errorf("read Redis Stream message %s: %w", id, err)
+	}
+	if len(messages) == 0 {
+		return redis.XMessage{ID: id, Values: map[string]any{}}, nil
+	}
+	return messages[0], nil
 }
 
 func (c *Consumer) process(ctx context.Context, message redis.XMessage, deliveryCount int64, handle func(context.Context, redis.XMessage) error) error {
