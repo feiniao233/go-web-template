@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -32,4 +33,19 @@ func TestReadyChecksRegisteredDependencies(t *testing.T) {
 			assert.Equal(t, test.status, res.Code)
 		})
 	}
+}
+
+func TestReadyRunsChecksConcurrently(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	checks := []health.Check{
+		{Name: "database", Ping: func(context.Context) error { time.Sleep(120 * time.Millisecond); return nil }},
+		{Name: "redis", Ping: func(context.Context) error { time.Sleep(120 * time.Millisecond); return nil }},
+	}
+	router := gin.New()
+	Register(router, checks)
+	res := httptest.NewRecorder()
+	start := time.Now()
+	router.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	assert.Equal(t, http.StatusOK, res.Code)
+	assert.Less(t, time.Since(start), 220*time.Millisecond)
 }
