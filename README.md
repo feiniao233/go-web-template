@@ -139,7 +139,33 @@ ClickHouse 运行时使用官方 Native Client；TDengine 只使用 WebSocket Dr
 
 选择 MQTT 后，服务启动时连接 Broker、掉线自动重连、恢复订阅，并把连接状态加入 `/ready`；业务模块在 `internal/bootstrap` 中通过 `integrations.MQTT.Subscribe` 注册主题。消息回调应尽快写入有界 channel 后返回。
 
-选择 Redis Stream 后会保留 Consumer Group 消费器，业务模块负责传入 stream、group、consumer 和消息处理函数；处理成功后才 ACK。单条消息处理失败不会直接终止整个 Worker，失败消息会保留在 PEL 中并可通过 `WithHandlerError` 记录或上报；重启时会先读取当前 consumer 的 pending 消息。
+选择 Redis Stream 后会保留 Consumer Group 消费器。处理成功后才 ACK；普通 Handler 错误不 ACK，消息保留在当前 consumer 的 PEL 中。通过 `WithRetry(retryIdle, maxDeliveries, dlqStream)` 可以启用运行时重试：只重试 idle 时间达到 `retryIdle` 的当前 consumer pending 消息，并在投递次数达到 `maxDeliveries` 后先写入 DLQ、再 ACK 原消息。`dlqStream` 为空时默认使用 `<stream>:dlq`。对于数据格式错误、缺少必填字段等重试也不会恢复的消息，可返回 `redisstream.Reject(err)` 直接进入 DLQ。Redis 读写、Claim、ACK 或 DLQ 写入等基础设施错误仍会让 Consumer 返回错误，由 Worker 的 fail-fast 机制停止服务。该实现面向当前固定 consumer 的单机部署，不使用 `XAUTOCLAIM` 接管其他 consumer 的 pending；Handler 应按消息可能重复投递设计为幂等。
+
+示例：
+
+```go
+consumer, err := redisstream.New(
+    redisClient,
+    "device-events",
+    "device-workers",
+    "default_consumer",
+    500*time.Millisecond,
+    100,
+    redisstream.WithRetry(30*time.Second, 5, ""),
+)
+if err != nil {
+    return err
+}
+
+workers.Add("device-events", func(ctx context.Context) error {
+    return consumer.Run(ctx, func(ctx context.Context, message redis.XMessage) error {
+        if _, ok := message.Values["data"]; !ok {
+            return redisstream.Reject(errors.New("data is required"))
+        }
+        return handleDeviceEvent(ctx, message)
+    })
+})
+```
 
 选择 `-frontend=embed` 后，`internal/httpapi/frontend/dist` 会编译进二进制，未知的非 API 路由回退到 `index.html`。将前端构建产物输出或复制到该目录即可。
 
