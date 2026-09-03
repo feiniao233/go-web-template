@@ -1,6 +1,8 @@
 package main
 
 import (
+	"go/parser"
+	"go/token"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,4 +46,41 @@ func TestFilterNestedYAML(t *testing.T) {
 	assert.NotContains(t, filtered, "redis:")
 	assert.NotContains(t, filtered, "mqtt:")
 	assert.Contains(t, filtered, "log:")
+}
+
+func TestGeneratedSourceMatrixParses(t *testing.T) {
+	databases := []string{"postgres", "mysql", "none"}
+	telemetry := []string{"clickhouse", "tdengine", "none"}
+	booleans := []bool{false, true}
+
+	for _, database := range databases {
+		for _, telemetry := range telemetry {
+			for _, redisEnabled := range booleans {
+				for _, mqttEnabled := range booleans {
+					opts := options{
+						module:    "example.com/service",
+						database:  database,
+						telemetry: telemetry,
+						redis:     redisEnabled,
+						mqtt:      mqttEnabled,
+						frontend:  "none",
+					}
+					name := database + "/" + telemetry
+					if redisEnabled {
+						name += "/redis"
+					}
+					if mqttEnabled {
+						name += "/mqtt"
+					}
+					t.Run(name, func(t *testing.T) {
+						require.NoError(t, validate(&opts))
+						_, err := parser.ParseFile(token.NewFileSet(), "storage.go", renderStorage(opts), parser.AllErrors)
+						require.NoError(t, err)
+						_, err = parser.ParseFile(token.NewFileSet(), "integration.go", renderIntegrations(opts), parser.AllErrors)
+						require.NoError(t, err)
+					})
+				}
+			}
+		}
+	}
 }

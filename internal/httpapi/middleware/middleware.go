@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -28,7 +29,11 @@ func Request(logger *logrus.Logger) gin.HandlerFunc {
 		c.Header("Referrer-Policy", "no-referrer")
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				logger.WithFields(logrus.Fields{"request_id": requestID, "panic": recovered}).Error("panic recovered")
+				logger.WithFields(logrus.Fields{
+					"request_id": requestID,
+					"panic":      recovered,
+					"stack":      string(debug.Stack()),
+				}).Error("panic recovered")
 				if !c.Writer.Written() {
 					response.Error(c, http.StatusInternalServerError, "internal server error")
 				}
