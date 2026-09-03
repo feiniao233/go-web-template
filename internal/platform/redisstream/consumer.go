@@ -38,7 +38,9 @@ func WithRetry(retryIdle time.Duration, maxDeliveries int64, dlqStream string) O
 	return func(c *Consumer) {
 		c.retryIdle = retryIdle
 		c.maxDeliveries = maxDeliveries
-		c.dlqStream = dlqStream
+		if dlqStream != "" {
+			c.dlqStream = dlqStream
+		}
 	}
 }
 
@@ -53,7 +55,10 @@ func New(client *redis.Client, stream, group, consumer string, block time.Durati
 	if client == nil || stream == "" || group == "" || consumer == "" || block <= 0 || count <= 0 {
 		return nil, fmt.Errorf("invalid Redis Stream consumer settings")
 	}
-	result := &Consumer{client: client, stream: stream, group: group, consumer: consumer, block: block, count: count}
+	result := &Consumer{
+		client: client, stream: stream, group: group, consumer: consumer,
+		block: block, count: count, dlqStream: stream + ":dlq",
+	}
 	for _, option := range options {
 		if option != nil {
 			option(result)
@@ -62,13 +67,8 @@ func New(client *redis.Client, stream, group, consumer string, block time.Durati
 	if result.retryIdle < 0 || result.maxDeliveries < 0 {
 		return nil, fmt.Errorf("invalid Redis Stream retry settings")
 	}
-	if result.retryIdle > 0 {
-		if result.maxDeliveries <= 0 {
-			return nil, fmt.Errorf("Redis Stream max deliveries must be positive when retry is enabled")
-		}
-		if result.dlqStream == "" {
-			result.dlqStream = stream + ":dlq"
-		}
+	if result.retryIdle > 0 && result.maxDeliveries <= 0 {
+		return nil, fmt.Errorf("Redis Stream max deliveries must be positive when retry is enabled")
 	}
 	return result, nil
 }
@@ -129,25 +129,19 @@ func (c *Consumer) retryPending(ctx context.Context, handle func(context.Context
 	}
 
 	for _, item := range pending {
-		if c.maxDeliveries > 0 && item.RetryCount >= c.maxDeliveries {
-			messages, err := c.claim(ctx, item.ID)
-			if err != nil {
-				return false, err
-			}
-			for _, message := range messages {
-				if err := c.deadLetter(ctx, message, item.RetryCount, errors.New("maximum deliveries exceeded")); err != nil {
-					return false, err
-				}
-			}
-			continue
-		}
-
 		messages, err := c.claim(ctx, item.ID)
 		if err != nil {
 			return false, err
 		}
 		for _, message := range messages {
-			if err := c.process(ctx, message, item.RetryCount+1, handle); err != nil {
+			deliveryCount := item.RetryCount + 1
+			if c.maxDeliveries > 0 && item.RetryCount >= c.maxDeliveries {
+				if err := c.deadLetter(ctx, message, deliveryCount, errors.New("maximum deliveries exceeded")); err != nil {
+					return false, err
+				}
+				continue
+			}
+			if err := c.process(ctx, message, deliveryCount, handle); err != nil {
 				return false, err
 			}
 		}
@@ -183,9 +177,6 @@ func (c *Consumer) process(ctx context.Context, message redis.XMessage, delivery
 }
 
 func (c *Consumer) deadLetter(ctx context.Context, message redis.XMessage, deliveryCount int64, cause error) error {
-	if c.dlqStream == "" {
-		return fmt.Errorf("Redis Stream DLQ is not configured for message %s", message.ID)
-	}
 	payload, err := json.Marshal(message.Values)
 	if err != nil {
 		return fmt.Errorf("encode Redis Stream message %s for DLQ: %w", message.ID, err)
