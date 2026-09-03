@@ -16,7 +16,7 @@ type pageBody struct {
 }
 
 func Success(c *gin.Context, status int, msg string, data any) {
-	c.JSON(status, body{Code: 200, Msg: msg, Data: data})
+	c.JSON(status, body{Code: status, Msg: msg, Data: data})
 }
 
 func Page(c *gin.Context, msg string, data any, total int64, page, pageSize int) {

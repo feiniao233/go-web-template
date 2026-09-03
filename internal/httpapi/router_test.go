@@ -130,7 +130,7 @@ func TestCreatedAndDeletedResponseCodes(t *testing.T) {
 			Msg  string `json:"msg"`
 		}
 		require.NoError(t, json.Unmarshal(res.Body.Bytes(), &body))
-		assert.Equal(t, 200, body.Code)
+		assert.Equal(t, test.httpStatus, body.Code)
 		assert.Equal(t, test.msg, body.Msg)
 	}
 }
