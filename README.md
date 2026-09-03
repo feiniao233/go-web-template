@@ -120,7 +120,7 @@ PUT    /api/v1/notes/{id}  {"title":"hello","content":"updated"}
 DELETE /api/v1/notes/{id}
 ```
 
-普通成功响应为 `{"code":200,"msg":"ok","data":...}`；分页响应额外包含 `total`、`page`、`page_size`。错误响应使用真实 HTTP 状态，body 为 `{"code":状态码,"msg":"...","data":null}`。创建返回 HTTP 201 但 body `code` 仍为 200，删除返回 HTTP 200。`page_size` 默认 20，最大 100。
+普通成功响应的 body `code` 与真实 HTTP 状态一致，例如 HTTP 200 返回 `{"code":200,"msg":"ok","data":...}`，HTTP 201 返回 `{"code":201,"msg":"created","data":...}`；分页响应额外包含 `total`、`page`、`page_size`。错误响应同样使用真实 HTTP 状态，body 为 `{"code":状态码,"msg":"...","data":null}`。删除返回 HTTP 200。`page_size` 默认 20，最大 100。
 
 ## 检查
 
@@ -139,7 +139,7 @@ ClickHouse 运行时使用官方 Native Client；TDengine 只使用 WebSocket Dr
 
 选择 MQTT 后，服务启动时连接 Broker、掉线自动重连、恢复订阅，并把连接状态加入 `/ready`；业务模块在 `internal/bootstrap` 中通过 `integrations.MQTT.Subscribe` 注册主题。消息回调应尽快写入有界 channel 后返回。
 
-选择 Redis Stream 后会保留 Consumer Group 消费器，业务模块负责传入 stream、group、consumer 和消息处理函数；处理成功后才 ACK，重启时先读取当前 consumer 的 pending 消息。
+选择 Redis Stream 后会保留 Consumer Group 消费器，业务模块负责传入 stream、group、consumer 和消息处理函数；处理成功后才 ACK。单条消息处理失败不会直接终止整个 Worker，失败消息会保留在 PEL 中并可通过 `WithHandlerError` 记录或上报；重启时会先读取当前 consumer 的 pending 消息。
 
 选择 `-frontend=embed` 后，`internal/httpapi/frontend/dist` 会编译进二进制，未知的非 API 路由回退到 `index.html`。将前端构建产物输出或复制到该目录即可。
 
