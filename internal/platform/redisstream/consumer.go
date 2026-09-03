@@ -80,6 +80,11 @@ func (c *Consumer) Run(ctx context.Context, handle func(context.Context, redis.X
 	if err := c.client.XGroupCreateMkStream(ctx, c.stream, c.group, "0").Err(); err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		return fmt.Errorf("create Redis Stream group: %w", err)
 	}
+	if c.retryIdle == 0 {
+		if err := c.drainPending(ctx, handle); err != nil {
+			return err
+		}
+	}
 
 	for {
 		if c.retryIdle > 0 {
@@ -110,6 +115,37 @@ func (c *Consumer) Run(ctx context.Context, handle func(context.Context, redis.X
 					return err
 				}
 			}
+		}
+	}
+}
+
+func (c *Consumer) drainPending(ctx context.Context, handle func(context.Context, redis.XMessage) error) error {
+	cursor := "0"
+	for {
+		streams, err := c.client.XReadGroup(ctx, &redis.XReadGroupArgs{
+			Group: c.group, Consumer: c.consumer, Streams: []string{c.stream, cursor}, Count: c.count, Block: -1,
+		}).Result()
+		if errors.Is(err, redis.Nil) {
+			return nil
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("read Redis Stream pending messages: %w", err)
+		}
+		received := false
+		for _, stream := range streams {
+			for _, message := range stream.Messages {
+				received = true
+				cursor = message.ID
+				if err := c.process(ctx, message, 1, handle); err != nil {
+					return err
+				}
+			}
+		}
+		if !received {
+			return nil
 		}
 	}
 }
