@@ -41,7 +41,7 @@ func Open(cfg config.Config, logger *logrus.Logger) (*Storage, error) {
 		_ = primary.Close()
 		return nil, err
 	}
-	storage := &Storage{Primary: primary, Redis: redisClient, closers: []closer{redisClient, primary}}
+	storage := &Storage{Primary: primary, Redis: redisClient, closers: []closer{primary, redisClient}}
 	if primary.Enabled() {
 		storage.checks = append(storage.checks, health.Check{Name: "database", Ping: primary.Ping})
 	}
@@ -96,8 +96,8 @@ func (s *Storage) Checks() []health.Check { return s.checks }
 
 func (s *Storage) Close() error {
 	var errs []error
-	for _, resource := range s.closers {
-		if err := resource.Close(); err != nil {
+	for i := len(s.closers) - 1; i >= 0; i-- {
+		if err := s.closers[i].Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
